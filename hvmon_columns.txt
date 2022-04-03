@@ -1,0 +1,16 @@
+time timestamp
+severity integer
+crate integer
+card integer
+channel integer
+name text
+enabled boolean
+enabledfile boolean
+status text
+vswmax integer
+vfile integer
+vset integer
+vmon integer
+imax real
+imon real
+flagged boolean

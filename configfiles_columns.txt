@@ -1,0 +1,8 @@
+id integer
+system text
+name text
+version real
+contents text
+description text
+author text
+created timestamp

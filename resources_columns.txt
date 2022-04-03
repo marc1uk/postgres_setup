@@ -1,0 +1,3 @@
+time timestamp
+source text
+status jsonb

@@ -1,0 +1,11 @@
+run
+control
+logging
+runconfig
+configfiles
+geometry
+daq
+vme
+mrd
+hv
+lappd

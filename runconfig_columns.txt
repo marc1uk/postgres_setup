@@ -1,0 +1,12 @@
+id integer
+name text
+created timestamp
+geometry integer
+daq integer
+vme integer
+hv integer
+lappd integer
+mrd integer
+description text
+author text
+version real

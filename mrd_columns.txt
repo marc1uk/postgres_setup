@@ -1,0 +1,5 @@
+id integer
+created timestamp
+author text
+description text
+configfiles jsonb

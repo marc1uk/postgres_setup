@@ -1,0 +1,4 @@
+id integer
+date timestamp
+command text
+username text
