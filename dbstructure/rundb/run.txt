@@ -1,7 +1,7 @@
 id integer
 runnum bigint
-subrunnum integer
 start timestamp
 stop timestamp
 runconfig integer
 notes text
+git_tag text

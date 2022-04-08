@@ -1,0 +1,4 @@
+id integer
+timestamp timestamp
+source text
+status jsonb

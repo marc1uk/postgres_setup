@@ -1,4 +1,0 @@
-time timestamp
-source text
-severity integer
-message text

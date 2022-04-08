@@ -1,8 +1,7 @@
 id integer
-system text
-name text
+tool text
 version real
-contents text
 description text
 author text
 created timestamp
+contents text

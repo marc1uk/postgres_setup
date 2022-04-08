@@ -1,0 +1,5 @@
+id integer
+timestamp timestamp
+name text
+values jsonb
+data bytea

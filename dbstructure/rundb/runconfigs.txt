@@ -1,0 +1,7 @@
+id integer
+runconfig integer
+created timestamp
+description text
+author text
+hardware integer
+toolsconfig jsonb
