@@ -20,6 +20,7 @@ actions=$(dialog --checklist "Please select the actions to carry out" 20 80 5 \
 5 "Install configuration files" on \
 6 "Build databases" on \
 7 "Create roles" on \
+8 "Fill dummy data" off \
 2>&1 1>/dev/tty)
 
 if [ $? -ne 0 ]; then
@@ -206,6 +207,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	PGDATA=""
 	
 	# first try to locate the default database cluster
+	# this requires the database to be running
 	DEFAULTDIR=$(sudo -E -u postgres psql -t -c "show data_directory;" 2>/dev/null | head -n 1)
 	
 	if [ ${PIPESTATUS[0]} -ne 0 ] || [ -z "${DEFAULTDIR}" ]; then
@@ -513,6 +515,17 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 7 ]; then
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
 	
+fi
+
+# fill with random dummy data, for testing
+if [ ${ACTIONS[${ACTIONITEM}]} -eq 8 ]; then
+	./populate_tables.sh
+	if [ $? -ne 0 ]; then
+		dialog --infobox "Error filling tables with dummy data" 20 80
+	fi
+	
+	# move to next action item
+	let ACTIONITEM=${ACTIONITEM}+1
 fi
 
 # export settings to connect for future setup

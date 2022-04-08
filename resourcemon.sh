@@ -1,6 +1,15 @@
 #!/bin/bash
 
-time=`date +%s`
+# timestamps in postgres should be formatted 'YYYY-MM-DD HH:MM:SS'
+# though this is redundant as we use `now()`
+#time=`date +%s`
+time=$(date "+%Y-%m-%d %T")
+
+##########
+# Uptime #
+##########
+#uptimetext=$(uptime -p)   # "up 1 week, 20 hours, 39 minutes"
+uptime=`bc <<< $(uptime -p | awk '{print "10080 * "$2" + 60 * "$4" + "$6}')`
 
 ##########
 # Memory #
@@ -55,6 +64,18 @@ hdd1=`df -h | grep /dev/root | awk '{print $5}' | sed s:%::`
 #echo "getting temperature"
 temp=`/opt/vc/bin/vcgencmd measure_temp | sed s:temp=:: | sed s:"'C"::`
 
-#echo "inserting into db"
-#echo "insert into stats (time,mem,cpu,temp,hdd1,hdd2) values (now(), $mem,$cpu,$temp,$hdd1,0);"
-psql -U postgres -d gd -c "insert into stats (time,mem,cpu,temp,hdd1,hdd2) values (now(), $mem,$cpu,$temp,$hdd1,0);" &> /dev/null
+###########
+# Combine #
+###########
+# to allow the insertion of new resource monitoring stats at a later time without requiring modification
+# of the database schema, stats table stores a json object
+json="{\"uptime_mins\":$uptime,\"free_memory_percent\":$mem,\"cpu_use_percent\":$cpu,\"hdd_used_percent\":${hdd1},\"cpu_temp_C\":$temp}"
+
+###################
+# Add To Database #
+###################
+# old layout
+#psql -U postgres -d gd -c "insert into stats (time,uptime,mem,cpu,temp,hdd1,hdd2) values (now(),$uptime,$mem,$cpu,$temp,$hdd1,0);" &> /dev/null
+
+# new layout
+psql -U postgres -d gd -c "insert into stats (time,source,status) values (now(),$(basename $0),$json);" &> /dev/null
