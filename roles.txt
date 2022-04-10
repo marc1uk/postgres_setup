@@ -1,2 +1,3 @@
+# TODO figure out how to define this, together with the build_roles.sh script
 annie
 postgres

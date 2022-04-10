@@ -38,18 +38,22 @@ for ROLE in `cat roles.txt`; do
 	fi
 	
 	# grant privileges
-	# TODO we could parse these from a file, which would mean the user doesn't have to re-enter them
-	# if something goes wrong. we could also use the file to pre-populate a checklist.
-	# (in which case do we update the file if changes are made?)
-	# it seems like the two basic categories are privileges on 'SCHEMA pubic' and on each DATABASE
+	# TODO parse these from a file to pre-populate a checklist - saves repeated typing
+	# while allowing customisations at install time.
+	
+	# privileges may be quite complex, but the two basic categories of objects on which
+	# privileges are granted / revoked are 'SCHEMA pubic' and each 'DATABASE'.
+	# .e.g
+	# allow pi to query (select) entries from all tables in the public schema
+	psql -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO pi"
+	# allow pi to connect to and make temporary tables (required for complex queries) in the 'rundb' database
+	psql -c "GRANT CONNECT, TEMPORARY ON DATABASE rundb TO pi"
+	
+	
 	
 	##############################
 	
 	
-	# allow annie to connect and make temporary tables in both databases
-	psql -c "GRANT CONNECT, TEMPORARY ON DATABASE rundb, monitoringdb TO annie"
-	# allow annie to select entries in all tables in the public schema
-	psql -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO annie"
 	# only allow the select sequences.
 	psql -c "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO annie"
 	# revoke permissions for everything else.

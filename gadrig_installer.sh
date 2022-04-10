@@ -136,12 +136,15 @@ fi
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 	
 	# ok next up; configure the postgres database
-	./SetupPostgres.sh
+	# this takes as an argument the name of a script that can be sourced to setup the environment.
+	./SetupPostgres.sh '/home/pi/setup_postgres.sh'
 	if [ $? -ne 0 ]; then
 		dialog --infobox "Postgres setup failed, please investigate and retry" 20 80
 		echo "\n\n\nFailed command: './SetupPostgres.sh'"
 		exit 1
 	fi
+	# one thing not done is set the default postgres user, but we can do this
+	echo 'PG_USER=postgres' >> /home/pi/setup_postgres.sh
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1

@@ -12,7 +12,7 @@ if [ `whoami` != "root" ]; then
 fi
 
 # run a checklist dialog to see what steps to perform; 
-actions=$(dialog --checklist "Please select the actions to carry out" 20 80 5 \
+actions=$(dialog --checklist "Please select the actions to carry out" 20 80 9 \
 1 "Install postgres" on \
 2 "Set password for postgres user" on \
 3 "Add admin accounts to the postgres group" on \
@@ -21,6 +21,7 @@ actions=$(dialog --checklist "Please select the actions to carry out" 20 80 5 \
 6 "Build databases" on \
 7 "Create roles" on \
 8 "Fill dummy data" off \
+9 "Setup replication" off \
 2>&1 1>/dev/tty)
 
 if [ $? -ne 0 ]; then
@@ -200,57 +201,79 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 fi
 
-# create databases
-if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
-	
-	# this will be the directory for the database cluster we'll set up
+
+# The next set of steps require the database cluser to be running, and we also need to
+# secify its data directory, to identify it in case there are multiple
+#PGDATA=$(psql -t -c "show data_directory;" 2>/dev/null | head -n 1)
+# the above requires the db to be running, which it may not be
+# a better way is to use pg_lsclusters, a helper function (hopefully provided by all distros)
+# this lists all installed clusters - we'll assume there is only one, called (by default) 'main'
+PGCLUSTERS=$(pg_lsclusters | tail -n +2)
+NCLUSTERS=`echo ${PGCLUSTERS} | wc -l`
+if [ ${NCLUSTERS} -eq 0 ]; then
+	# found no clusters; abort? TODO offer to create one
+	dialog --yesno "Failed to locate any postresql clusters. Would you like to make a new one?" 20 80
+	if [ $? -ne 0 ]; then
+		echo "Aborted"
+		exit 1
+	fi
+	# otherwise, we'll make one in a minute, but for now we have no PGDATA
 	PGDATA=""
-	
-	# first try to locate the default database cluster
-	# this requires the database to be running
-	DEFAULTDIR=$(sudo -E -u postgres psql -t -c "show data_directory;" 2>/dev/null | head -n 1)
-	
-	if [ ${PIPESTATUS[0]} -ne 0 ] || [ -z "${DEFAULTDIR}" ]; then
-		# could not find default database cluster
-		
-		# see if user wants to continue with making a new one anyway
-		ERRMSG=$(sudo -E -u postgres psql -t -c "show data_directory;" 2>&1)
-		dialog --yesno "`echo "Failed to locate default database cluster: error was '${ERRMSG}'\n" \
-		                      "This will prevent further configuration of the default database cluster, " \
-		                      "but you may continue if you plan to set up another one anyway.\n" \
-		                      "Would you like to set up a new database cluster?"`" 20 80
+elif [ ${NCLUSTERS} -eq 1 ]; then
+	# found one cluster
+	PGDATA=`echo ${PGCLUSTERS} | awk '{ print $6 }'`
+	# check the user wants to continue with it
+	dialog --yesno "`echo "Found existing database cluster in ${PGDATA}.\n" \
+	               "Would you like to continue setting up this cluster, " \
+	               "or set up another one elsewhere?"`" \
+	       --yes-label "Use this cluster" --no-label "Create a new cluster" 20 80
+	if [ $? -ne 0 ]; then
+		# if we're not going to be using it, should we stop this cluster?
+		dialog --yesno "Should this database cluster be stopped?" 20 80
 		if [ $? -ne 0 ]; then
-			echo "Aborted"
-			exit 1
-		fi
-		# else could not find default database cluster, but will continue with making a new one
-		
-	else
-		# found default database cluster
-		
-		# see if user wants to use it, or make a new one
-		dialog --yesno "`echo "Found default database cluster in ${DEFAULTDIR}.\n" \
-		               "Would you like to continue setting up this cluster, " \
-		               "or set up another one elsewhere?"`" \
-		       --yes-label "Use default cluster" --no-label "Create new cluster" 20 80
-		
-		if [ $? -eq 0 ]; then
-			# we'll use the default db cluster
-			PGDATA="${DEFAULTDIR}"
-		else
-			# if we're not going to be using it, should we stop the default db?
-			dialog --yesno "Should the default database cluster be stopped?" 20 80
-			if [ $? -ne 0 ]; then
-				sudo -E -u postgres pg_ctl stop -D ${DEFAULTDIR} 2>&1 | dialog --title \
-				        "Stopping default database cluster..." --progressbox 20 80
-				if [ ${PIPESTATUS[0]} -ne 0 ]; then
-					sleep 2 # let user inspect output for a bit?
-					dialog --msgbox "Error stopping default database cluster" 20 80
-					# don't think we need to abort, it's not critical that it's stopped...
-				fi
+			sudo -E -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title \
+			        "Stopping default database cluster..." --progressbox 20 80
+			if [ ${PIPESTATUS[0]} -ne 0 ]; then
+				sleep 2 # let user inspect output for a bit?
+				dialog --msgbox "Error stopping default database cluster" 20 80
+				# don't think we need to abort, it's not critical that it's stopped...
 			fi
 		fi
+		PGDATA=""
+	fi # else we'll continue with this cluster
+else
+	# found more than one cluster: ask user to choose
+	MENU=$(
+		let i=0;
+		for LINE in "${PGCLUSTERS[@]}"; do
+				STR=`echo ${LINE} | awk '{ print $6 }'`
+				PGCLUSTERARR[$i]=$STR
+				echo "'"$STR"'" $i;
+				let i=$i+1;
+		done;
+	)
+	NUMOPTS=`expr ${NCLUSTERS} + 1`  # one extra for the option of a new cluster
+	CLUSTERNUM=$(dialog --menu "Found multiple database clusters; which would you like to set up?" \
+	             20 80 ${NUMOPTS} ${MENU} "New cluster" $NCLUSTERS 2>&1 1>/dev/tty)
+	if [ $? -ne 0 ]; then
+		echo "Aborted"
+		exit 1
+	elif [ "${VAR}" == "New cluster" ]; then
+		PGDATA=""
+	else
+		PGDATA="${VAR}"
 	fi
+fi
+# if we have a cluster, check if it's running
+if [ ! -z "${PGDATA}" ]; then
+	PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
+	PGSTATUS=`[ ${PGSTATUS} == "online" ]; echo $?`
+else
+	PGSTATUS=0
+fi
+
+# create databases
+if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	
 	# if we're making a new cluster...
 	if [ -z "${PGDATA}" ]; then
@@ -365,13 +388,13 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 		mkdir -p /etc/systemd/system/${SERVICENAME}.d/
 		echo "[Service]" >> /etc/systemd/system/postgresql-12.serviced/override.conf
 		echo "Environment=PGDATA=${PGDATA}" >> /etc/systemd/system/${SERVICENAME}.serviced/override.conf
-		# XXX what if the user wants *both* default db cluster and this one to run on boot....??
+		# XXX does this prevent other clusters starting on boot? what if we don't want that?
 		
 		
 	else
 		
 		
-		# continuing with the default database; however as above we may still wish to move
+		# continuing with an existing database; however as above we may still wish to move
 		# the location of the WAL files to another disk
 		dialog --yesno "`echo "Would you like to store WAL file in a custom location?" \
 		                      "For optimal performance WAL files should be stored on a" \
@@ -387,8 +410,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 			fi
 			
 			# double check they actually chose a location different to the default
-			if [ "${DB_WAL}" != "${PGDATA}/pg_wal" ]; then
-				# they did. ok, we need to stop the database service for this.
+			if [ ${PGSTATUS} -eq 1 ] && [ "${DB_WAL}" != "${PGDATA}/pg_wal" ]; then
+				# they did, and the db is running. we need to stop the database service for this.
 				dialog --yesno "`echo "The database service must be briefly stopped to move "
 				               "the WAL file location. Continue?"`" \
 				       --yes-label "Continue" --no-label "Skip" 20 80
@@ -418,7 +441,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 					# we'll restart the service at the end of this script
 					
 				fi  # else user aborted search for new directory
-			fi   # else user did not provide a new directory
+			fi   # else user did not provide a new directory, or db is not running
 		fi    # end if user asked to move WAL default directory
 	fi    # end if making a new cluster / using default database cluster
 	
@@ -429,13 +452,6 @@ fi
 
 # install configuration files
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
-	
-	# in case we didn't in the previous step, locate our database directory
-	PGDATA=$(sudo -E -u postgres psql -t -c "show data_directory;" 2>/dev/null | head -n 1)
-	if [ ${PIPESTATUS[0]} -ne 0 ] || [ -z "${PGDATA}" ]; then
-		dialog --infobox "Error locating database cluster!" 20 80
-		exit 1
-	fi
 	
 	# replace configuration files
 	dialog --infobox "Backing up postgresql.conf, pg_ident.conf, pg_hba.conf to *.bk" 20 80
@@ -450,13 +466,15 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	
 	# some of these changes can be registered by sending SIGINT to the postgres service,
 	# others can be registered by doing `pg_ctl reload`, but some of them need a full stop/restart.
-	sudo -E -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title "Stopping database cluster..." \
-	                                                        --progressbox 20 80
-	if [ ${PIPESTATUS[0]} -ne 0 ]; then
-		sleep 2 # let user inspect output for a bit?
-		dialog --msgbox "`echo "Error stopping database cluster, some configuration changes " \
-		                       "may not take effect until the database has been properly stopped " \
-		                       "and restarted"`"
+	if [ ${PGSTATUS} -eq 1 ]; then
+		sudo -E -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title "Stopping database cluster..." \
+			                                                    --progressbox 20 80
+		if [ ${PIPESTATUS[0]} -ne 0 ]; then
+			sleep 2 # let user inspect output for a bit?
+			dialog --msgbox "`echo "Error stopping database cluster, some configuration changes " \
+				                   "may not take effect until the database has been properly stopped " \
+				                   "and restarted"`"
+		fi
 	fi
 	
 	# move to next action item
@@ -464,16 +482,10 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	
 fi
 
-
-# further actions require the db to be running, so start the database
-# first locate our cluster
-PGDATA=$(sudo -E -u postgres psql -t -c "show data_directory;" 2>/dev/null | head -n 1)
-if [ ${PIPESTATUS[0]} -ne 0 ] || [ -z "${PGDATA}" ]; then
-	dialog --infobox "Error locating database cluster!" 20 80
-	exit 1
-fi
+# the next set of actions require the db to be running
 # check if it's already running
 sudo -E -u postgres /usr/lib/postgresql/11/bin/pg_ctl -D ${PGDATA} status | grep "running"
+
 # start it if necessary
 if [ $? -ne 0 ]; then
 	# start it up
@@ -484,6 +496,10 @@ if [ $? -ne 0 ]; then
 		dialog --infobox "Error starting database cluster!" 20 80
 		exit 1
 	fi
+	# TODO: can check whether a server is yet up and running with `pg_isready`.
+	# return value of 0 means yes, 1 means server responded that is rejecting connections
+	# (e.g. restoring but not yet in a consistent state), 2 means no response.
+	# keep polling until it is.
 fi
 
 
@@ -528,13 +544,26 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 8 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 fi
 
+# fill with random dummy data, for testing
+if [ ${ACTIONS[${ACTIONITEM}]} -eq 9 ]; then
+	./setup_replication.sh
+	if [ $? -ne 0 ]; then
+		dialog --infobox "Error setting up replication" 20 80
+	fi
+	
+	# move to next action item
+	let ACTIONITEM=${ACTIONITEM}+1
+fi
+
 # export settings to connect for future setup
 echo "PG_COLOR=always" >> ${PG_SOURCE_SCRIPT}
-# we'd need to check these... TODO maybe with more interaction from dialog options...
-#echo "PGPORT=5432" >> ${PG_SOURCE_SCRIPT}                # extract port from postgresql.conf with sed?
-#echo "PGHOST=/tmp" >> ${PG_SOURCE_SCRIPT}                # *should* work for local connections...
+export "PGDATA=${PGDATA}" >> ${PG_SOURCE_SCRIPT}
+PGPORT=`pg_lsclusters | grep ${PGDATA} | awk '{print $3 }'`
+#echo "PGDATABASE=${DBNAME}" >> ${PG_SOURCE_SCRIPT}       # TODO ask user which db should be default?
+echo "PGPORT=${PGPORT}" >> ${PG_SOURCE_SCRIPT}
+PGHOST=`grep -e '^unix_socket_directories' /etc/postgresql/11/main/postgresql.conf | awk '{ print $3 }'`
+echo "PGHOST=${PGHOST}" >> ${PG_SOURCE_SCRIPT}            # *should* work for local connections...
 #echo "PGUSER=postgres" >> ${PG_SOURCE_SCRIPT}            # maybe not what the user wants...?
-#echo "PGDATABASE=${DBNAME}" >> ${PG_SOURCE_SCRIPT}       # need to add DBNAME to the script
 #echo "PGPASSWORD=${PGPASSWORD}" >> ${PG_SOURCE_SCRIPT}   # not secure
 
 # slightly more secure - store the database password in a ~/.pgpass file
