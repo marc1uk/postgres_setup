@@ -1,4 +1,22 @@
 #!/bin/bash
+#set -x
+trap 'echo "Aborted"; exit 1' SIGINT
+
+which dialog &>/dev/null
+if [ $? -ne 0 ]; then
+	echo "This install script requires the 'dialog' package. Would you like to install it now?"
+	select RESULT in Yes No; do
+		if [ "${RESULT}" != "Yes" ] && [ "${RESULT}" != "No" ]; then
+			echo "Please enter 1 to install dialog and continue, or 2 to abort"
+		elif [ "${RESULT}" == "No" ]; then
+			echo "Discontinuing"
+			exit 1
+		else
+			sudo apt-get install -y dialog
+			break
+		fi
+	done
+fi
 
 alias dialog='dialog --backtitle "Postgres Setup" --aspect 100 --cr-wrap'
 
@@ -46,6 +64,7 @@ ACTIONITEM=0
 #dialog --extra-button --extra-label "Skip" --ok-label "Continue" --yesno "The first step is to install prerequisite software packages. Would you like to proceed with prerequisite package installation?" 20 80
 
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
+	echo "Action 1: Install packages"
 	
 	exec 3< ./postgres_packages.txt  # open list of package names as file descriptor 3
 	
@@ -68,7 +87,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 		dialog --infobox "all required packages appear to be installed." 20 80
 		sleep 1
 	else
-		dialog --yesno "the following packages are to be installed:\n ${PACKAGES}" 20 80
+		dialog --yesno "the following packages are to be installed:\n ${PACKAGES}" --yes-label "continue" --no-label "cancel" 20 80
 		if [ $? -eq 0 ]; then
 			apt-get install ${PACKAGES_TO_INSTALL} 2>&1 | dialog -title "installing..." --progressbox 20 80
 			# n.b. programbox is the same as progressbox but requires 'ok' when you're done
@@ -78,56 +97,68 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 				echo "\n\n\nFailed command: 'apt-get install ${PACKAGES_TO_INSTALL}'"
 				exit 1
 			fi
+		else
+			echo "Aborted"
+			exit 1
 		fi
 	fi
 	
-	# this usually installs postgres into some obscure location that isn't on PATH;
-	PGCTLBIN=$(which pg_ctl)  # see if we can find pg_ctl on PATH
-	if [ -z "${PGCTLBIN}" ]; then    # if we didn't find it (which we probably didn't)
-		PGCTLBIN=$(dpkg -L postgresql-11 | grep -P '.*/pg_ctl$')  # find it from the list of installed files
-		PGBINDIR=$(dirname ${PGCTLBIN})                           # grab the path
-		export PATH=${PGBINDIR}:${PATH}
-		echo "export PATH=${PGBINDIR}:${PATH}" >> ${PG_SOURCE_SCRIPT}
-	fi
-	if [ -z "${PGBINDIR}" ]; then
-		dialog --infobox "Failed to locate pg_ctl; check postgres installation" 20 80
-		exit 1
-	fi
-	# its probably also not on the LD_LIBRARY_PATH
-	PGLIBDIR=$(readlink -f ${PGBINDIR}/../lib)
-	if [ `grep "${PGLIBDIR}" <<< "${LD_LIBRARY_PATH}"` -eq 1 ]; then
-		export LD_LIBRARY_PATH=${PGLIBDIR}:${LD_LIBRARY_PATH}
-		echo "LD_LIBRARY_PATH=${PGLIBDIR}:${LD_LIBRARY_PATH}" >> ${PG_SOURCE_SCRIPT}
-	fi
-	
-	# check it's set to start on boot
-	# search for a systemd unit file, service name varies from distro to distro
-	SERVICENAME=$(systemctl list-unit-files | grep postgres | grep -v indirect)
-	if [ ! -z "${SERVICENAME}" ]; then
-		# we found a service. the captured name actually contains its name and status:
-		POSTGRESSTATUS=`echo ${SERVICENAME} | cut -d' ' -f 2`
-		SERVICENAME=`echo ${SERVICENAME} | cut -d' ' -f 1`
-		# if it's disabled, enable it now
-		if [ "${POSTGRESSTATUS}" == "disabled" ]; then
+	# move to next action item
+	let ACTIONITEM=${ACTIONITEM}+1
+		
+fi
+
+# whether we needed to install it or not, we should check it's set to start on boot
+# search for a systemd unit file, service name varies from distro to distro
+SERVICENAME=$(systemctl list-unit-files | grep postgres | grep -v indirect)
+if [ ! -z "${SERVICENAME}" ]; then
+	# we found a service. the captured name actually contains its name and status:
+	POSTGRESSTATUS=`echo ${SERVICENAME} | cut -d' ' -f 2`
+	SERVICENAME=`echo ${SERVICENAME} | cut -d' ' -f 1`
+	# if it's disabled, enable it now
+	if [ "${POSTGRESSTATUS}" == "disabled" ]; then
+		dialog --yesno "postgres service is not configured to start on boot. Would you like to enable this now?" 20 80
+		if [ $? -eq 0 ]; then
 			sudo -E systemctl enable ${SERVICENAME}
 			if [ $? -ne 0 ]; then
 				dialog --msgbox "Failed to enable postgresql service; postgres may not start on boot" 20 80
 				# we won't exit, since this shouldn't interfere with installation for now
 			fi
 		fi
-	else
-		# couldn't find anything that looks like a postgresql service
-		dialog --msgbox "Failed to locate postgresql service; postgres may not start on boot" 20 80
-		# we won't exit, since this shouldn't interfere with installation for now
 	fi
-	
-	# move to next action item
-	let ACTIONITEM=${ACTIONITEM}+1
-	
+else
+	# couldn't find anything that looks like a postgresql service
+	dialog --msgbox "Failed to locate postgresql service; postgres may not start on boot" 20 80
+	# we won't exit, since this shouldn't interfere with installation for now
+fi
+
+# postgres is often installed into some obscure location that isn't on system search paths
+# we'll need pg_ctl for later steps, and we should add the binary and lib directories
+# to the environmental setup script we're building; let's do that now
+PGCTLBIN=$(which pg_ctl)  # see if we can find pg_ctl on current PATH
+if [ -z "${PGCTLBIN}" ]; then    # if we didn't find it (which we probably didn't)
+	PGCTLBIN=$(dpkg -L postgresql-11 | grep -P '.*/pg_ctl$')  # find it from the list of installed files
+	PGBINDIR=$(dirname ${PGCTLBIN})                           # grab the path
+fi
+if [ -z "${PGBINDIR}" ]; then
+	dialog --infobox "Failed to locate pg_ctl; check postgres installation" 20 80
+	exit 1
+else
+	# add it to path
+	export PATH=${PGBINDIR}:${PATH}
+	# add it to the environmental setup script too
+	echo "export PATH=${PGBINDIR}"':${PATH}' >> ${PG_SOURCE_SCRIPT}
+fi
+# same with adding lib dir to LD_LIBRARY_PATH
+PGLIBDIR=$(readlink -f ${PGBINDIR}/../lib)
+if [ -d "${PGLIBDIR}" ] && [ `grep "${PGLIBDIR}" <<< "${LD_LIBRARY_PATH}" &>/dev/null; echo $?` -eq 1 ]; then
+	export LD_LIBRARY_PATH=${PGLIBDIR}:${LD_LIBRARY_PATH}
+	echo "LD_LIBRARY_PATH=${PGLIBDIR}"':${LD_LIBRARY_PATH}' >> ${PG_SOURCE_SCRIPT}
 fi
 
 # set password on postgres user account
-if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
+if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
+	echo "Action 2: set password on postgres user account"
 	
 	# sanity check
 	id -u postgres &>/dev/null
@@ -135,14 +166,18 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 		dialog --infobox "Failed to locate postgres user account; check postgres installation" 20 80
 		exit 1
 	fi
-	
-	dialog --yesno --extra-button --yes-label "Enter password" --no-label "Auto-Generate password" \
-	       --extra-label "Skip" "`echo "Setting a password on the postgres user account to protect database." \
-	                                   "Enter a password manually or auto-generate?"`" 20 80
-	if [ $? -eq 0 ]; then
+
+	# when extra-button is added, apprently the default yes no buttons become ok cancel,
+	# so need to set ok-label and cancel-label instead of yes-label and no-label.
+	# also extra buttin is placed so that button order is 'OK' 'Extra' 'Cancel'
+	dialog --ok-label 'Enter password' --extra-button --extra-label 'Auto-Generate' --extra-button \
+	       --cancel-label 'Skip' --yesno "`echo "Setting a password on the postgres user account." \
+	                                              "Enter a password manually or auto-generate?"`" 20 80
+	RET=$?
+	if [ $RET -eq 0 ]; then
 		# enter password manually
 		step=0
-		while [ step -lt 3 ]; do
+		while [ ${step} -lt 3 ]; do
 			if [ ${step} -eq 0 ]; then
 				firstentry=$(dialog --insecure --passwordbox "Enter postgres user password" 2>&1 1>/dev/tty)
 				step=1
@@ -160,11 +195,14 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 		
 		# see if the user wants to record the postgres password...
 		# we'll need to do this if we're generating a password so that the user knows what it is...
-		SAVEPASS=`dialog --yesno "Save password in /home/postgres/postgres_user_password?"`
-	else
+		SAVEPASS=`dialog --yesno "Save password in /home/postgres/postgres_user_password?"` 20 80
+	elif [ $RET -eq 3 ]; then
 		# generate password automatically
 		PGUSERPASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-32} | head -n 1)
 		SAVEPASS=0
+	else
+		SAVEPASS=1
+		NOPASS=1
 	fi
 	
 	# record the password if requested (or auto-generated)
@@ -174,12 +212,14 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 		chown postgres /home/postgres/postgres_user_password
 		chmod 700 /home/postgres/postgres_user_password
 	fi
-	
-	# do the actual password change
-	echo "postgres:${PGUSERPASS}" | chpasswd
-	if [$? -ne 0 ]; then
-		dialog --infobox "Error $? setting password for postgres user account!" 20 80
-		#exit 1    # maybe don't exit... again shouldn't interfere with installation
+
+	if [ ${NOPASS:-0} -eq 0 ]; then
+		# do the actual password change
+		echo "postgres:${PGUSERPASS}" | chpasswd
+		if [$? -ne 0 ]; then
+			dialog --infobox "Error $? setting password for postgres user account!" 20 80
+			#exit 1    # maybe don't exit... again shouldn't interfere with installation
+		fi
 	fi
 	
 	# move to next action item
@@ -188,14 +228,21 @@ fi
 
 # add admins to postgres group
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
-	USERLIST=$(dialog --inputbox "Enter names of all users to add to the postgres group" 20 80 2>&1 >/dev/tty)
-	for AUSER in ${USERLIST[@]}; do
-		/usr/sbin/usermod -aG postgres "${AUSER}"
-		if [ $? -ne 0 ]; then
-			dialog --msgbox "Failed to add user ${AUSER} to postgres group, please do so manually" 20 80
-			# not a critical error i think, we can continue (or user can press esc to exit)
-		fi
-	done
+	USERLIST=$(dialog --extra-button --extra-label "Skip" --inputbox \
+	           "Enter names of all users to add to the postgres group" 20 80 2>&1 >/dev/tty)
+	RET=$?
+	if [ $RET -eq 1 ]; then
+		echo "Aborted"
+		exit 1
+	elif [ $RET -eq 0 ]; then
+		for AUSER in ${USERLIST[@]}; do
+			/usr/sbin/usermod -aG postgres "${AUSER}"
+			if [ $? -ne 0 ]; then
+				dialog --msgbox "Failed to add user ${AUSER} to postgres group, please do so manually" 20 80
+				# not a critical error i think, we can continue (or user can press esc to exit)
+			fi
+		done
+	fi
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
@@ -223,14 +270,19 @@ elif [ ${NCLUSTERS} -eq 1 ]; then
 	# found one cluster
 	PGDATA=`echo ${PGCLUSTERS} | awk '{ print $6 }'`
 	# check the user wants to continue with it
-	dialog --yesno "`echo "Found existing database cluster in ${PGDATA}.\n" \
-	               "Would you like to continue setting up this cluster, " \
-	               "or set up another one elsewhere?"`" \
-	       --yes-label "Use this cluster" --no-label "Create a new cluster" 20 80
-	if [ $? -ne 0 ]; then
+	dialog --ok-label "Use this cluster" --extra-button --extra-label "Create a new cluster" \
+	       --cancel-label "Cancel" \
+	--yesno "`echo "Found existing database cluster in ${PGDATA}." \
+	               "\nWould you like to continue setting up this cluster, " \
+	               "or set up another one elsewhere?"`" 20 80
+	RET=$?
+	if [ $RET -eq 1 ]; then
+		echo "Aborted"
+		exit 1
+	elif [ $RET -ne 0 ]; then
 		# if we're not going to be using it, should we stop this cluster?
-		dialog --yesno "Should this database cluster be stopped?" 20 80
-		if [ $? -ne 0 ]; then
+		dialog --yesno "Should the existing database cluster be stopped?" 20 80
+		if [ $? -eq 0 ]; then
 			sudo -E -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title \
 			        "Stopping default database cluster..." --progressbox 20 80
 			if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -311,10 +363,11 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 		PGPASSWORD=""
 		dialog --yesno --extra-button --yes-label "Enter password" --no-label "Auto-Generate password" \
 		       --extra-label "Skip" "Would you like to set up a password for the database superuser?" 20 80
-		if [ $? -eq 0 ]; then
+		RET=$?
+		if [ $RET -eq 0 ]; then
 			# enter password manually
 			step=0
-			while [ step -lt 3 ]; do
+			while [ $step -lt 3 ]; do
 				if [ ${step} -eq 0 ]; then
 					first=$(dialog --insecure --passwordbox "Enter database superuser password" 2>&1 1>/dev/tty)
 					step=1
@@ -333,7 +386,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 			# note if the user wants to record the password
 			SAVEPASS=`dialog --yesno "Save password in /home/postgres/database_superuser_password?"`
 			
-		elif [ $? -eq 1 ]; then
+		elif [ $RET -eq 1 ]; then
 			# generate password automatically
 			PGPASSWORD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-32} | head -n 1)
 			SAVEPASS=0

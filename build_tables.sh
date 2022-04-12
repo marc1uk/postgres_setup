@@ -1,25 +1,53 @@
 #!/bin/bash
+#set -x
+trap "echo 'Aborted'; exit 1" SIGINT
+
 alias dialog='dialog --backtitle "Postgres Setup" --aspect 100 --cr-wrap'
 
 # construct the set of commands to execute, to be stored for posterity
 BUILDSTEPS=build_steps.sh
 echo "" > ${BUILDSTEPS}
 
+echo "PATH is $PATH"
+echo "pg_ctl is `which pg_ctl`"
+
 DATABASES=$(ls ./dbstructure)
 let i=0
 for DB in ${DATABASES[@]}; do
 	# strip preceding 'dbstructure/' from directory names
-	DATABASES[$i]=$(basename "${DB}");
+	NEXT=$(basename "${DB}");
+
+	# confirm
+	CMD="CREATE DATABASE ${NEXT}"
+	dialog --extra-button --extra-label "Skip" --yesno "create database ${NEXT}?" 20 80
+	RET=$?
+	if [ $RET -eq 1 ]; then
+		echo "Aborted"
+		exit 1
+	elif [ $RET -eq 3 ]; then
+		echo "Skipping database ${NEXT}"
+	else
+		# create the databases
+		echo "Creating database ${NEXT}"
+		DBARRAY[$i]=${NEXT}
+		RET=$(sudo -E -u postgres createdb ${NEXT} 2>&1)
+		#psql -U postgres -c "${CMD}"
+		if [ $? -ne 0 ]; then
+			if [ `echo "${RET}" | grep "already exists" &>/dev/null; echo $?` -eq 0 ]; then
+				echo "Database ${NEXT} already exists"
+				# TODO ask to drop and recreate it?
+			else
+				dialog --msgbox "Error creating database ${NEXT}" 20 80
+				exit 1
+			fi
+		fi
+	fi
 	let i=$i+1
-	
-	# create the database
-	createdb ${DATABASE[$i]}
-	#psql -c "CREATE DATABASE ${DATABASE[$i]}"
 done
 
 # loop over the databases in our cluster;
 # for example there may be a run database and a monitoring database
-for NEXTDB in $(ls ./dbstructure); do
+for NEXTDB in ${DBARRAY[@]}; do
 	
 	# loop over the tables in this db:
 	for TABLE in $(ls ./dbstructure/${NEXTDB}); do
@@ -49,7 +77,7 @@ for NEXTDB in $(ls ./dbstructure); do
 			fi
 			echo "${NEXTCOLUMN}";
 			echo -n "${NEXTCOLUMN}" >> ${BUILDSTEPS}
-		done < ${TABLE}.txt
+		done < ./dbstructure/${NEXTDB}/${TABLE}.txt
 		
 		echo "" >> ${BUILDSTEPS}
 		echo ");" >> ${BUILDSTEPS}
@@ -64,11 +92,12 @@ for NEXTDB in $(ls ./dbstructure); do
 		dialog --title "Check steps. Use h,j,k,l to scroll. Press ESC to abort" \
 		       --extra-button --extra-label "Skip" --textbox "${BUILDSTEPS}" 20 80
 		# for some annoying reason file display boxes can't have 3 buttons
-		if [ $? -eq 255 ]; then
+		RET=$?
+		if [ $RET -eq 255 ]; then
 			# user hit ESC.
 			echo "Aborted"
 			exit 1
-		elif [ $? -eq 3 ]; then
+		elif [ $RET -eq 3 ]; then
 			# user hit Skip
 			continue;
 		fi  # else user hit OK - continue
@@ -86,7 +115,7 @@ for NEXTDB in $(ls ./dbstructure); do
 	done  # end loop over tables (files in this database folder)
 	
 	dialog --msgbox "`echo "Completed table creation. Resulting structure:\n" \
-	                       "$(echo \"\dt+\" | psql -d \"dbname=${NEXTDB}\")"`" 20 80
+	                       "$(echo \"\dt\" | psql -d \"dbname=${NEXTDB}\")"`" 20 80
 	
 done  # end loop over databases (folders in ./dbstructure)
 
