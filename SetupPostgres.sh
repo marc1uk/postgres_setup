@@ -63,6 +63,11 @@ ACTIONITEM=0
 # first step: check we have all the required packages
 #dialog --extra-button --extra-label "Skip" --ok-label "Continue" --yesno "The first step is to install prerequisite software packages. Would you like to proceed with prerequisite package installation?" 20 80
 
+if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	"All actions done";
+	exit 0;
+fi
+
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	echo "Action 1: Install packages"
 	
@@ -105,7 +110,13 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
-		
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # whether we needed to install it or not, we should check it's set to start on boot
@@ -166,7 +177,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 		dialog --infobox "Failed to locate postgres user account; check postgres installation" 20 80
 		exit 1
 	fi
-
+	
 	# when extra-button is added, apprently the default yes no buttons become ok cancel,
 	# so need to set ok-label and cancel-label instead of yes-label and no-label.
 	# also extra buttin is placed so that button order is 'OK' 'Extra' 'Cancel'
@@ -224,6 +235,13 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # add admins to postgres group
@@ -246,8 +264,14 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
-
 
 # The next set of steps require the database cluser to be running, and we also need to
 # secify its data directory, to identify it in case there are multiple
@@ -501,6 +525,12 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
 	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # install configuration files
@@ -532,6 +562,12 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
 	
 fi
 
@@ -569,6 +605,12 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 6 ]; then
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
 	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # setup roles
@@ -584,6 +626,12 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 7 ]; then
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
 	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # fill with random dummy data, for testing
@@ -595,6 +643,13 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 8 ]; then
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # fill with random dummy data, for testing
@@ -606,6 +661,13 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 9 ]; then
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+		"All actions done";
+		exit 0;
+	fi
+	
 fi
 
 # export settings to connect for future setup

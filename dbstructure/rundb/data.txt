@@ -1,6 +1,7 @@
 id integer
 timestamp timestamp
 run integer
+measurement bigint
 tool text
 name text
 values jsonb

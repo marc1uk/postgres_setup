@@ -4,4 +4,4 @@ created timestamp
 description text
 author text
 hardware integer
-toolsconfig jsonb
+toolsconfig text

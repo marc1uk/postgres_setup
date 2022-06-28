@@ -1,4 +1,3 @@
-id integer
 runnum bigint
 start timestamp
 stop timestamp
