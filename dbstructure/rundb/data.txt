@@ -6,3 +6,4 @@ tool text
 name text
 values jsonb
 data bytea
+ledname text
