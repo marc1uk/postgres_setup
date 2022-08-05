@@ -2,6 +2,11 @@
 #set -x
 trap 'echo "Aborted"; exit 1' SIGINT
 
+if [ "$(whoami)" != "root" ]; then
+	echo "This script needs root privileges for some actions. Please re-run as root"
+	exit 1;
+fi
+
 which dialog &>/dev/null
 if [ $? -ne 0 ]; then
 	echo "This install script requires the 'dialog' package. Would you like to install it now?"
@@ -12,7 +17,7 @@ if [ $? -ne 0 ]; then
 			echo "Discontinuing"
 			exit 1
 		else
-			sudo apt-get install -y dialog
+			apt-get install -y dialog
 			break
 		fi
 	done
@@ -24,15 +29,11 @@ dialog --msgbox \
 "Welcome to the Gadolinium Absorbtion Device (GAD) Installation Script
 This script will walk you through the process of setting up the raspberry pi for the GAD" 20 80
 
-if [ `whoami` != "root" ]; then
-	dialog --msgbox "This script needs root privileges for some actions. Please re-run as root" 20 80
-	exit 1;
-fi
-
 # run a checklist dialog to see what steps to perform; 
 actions=$(dialog --checklist "Please select the actions to carry out" 20 80 9 \
 1 "Install postgres" on \
-2 "Set password for postgres user" on \
+#2 "Set password for postgres user" on \   ## apparently this is bad for security
+2 "Set locale" off \
 3 "Add admin accounts to the postgres group" on \
 4 "Create database cluster" on \
 5 "Install configuration files" on \
@@ -41,6 +42,11 @@ actions=$(dialog --checklist "Please select the actions to carry out" 20 80 9 \
 8 "Fill dummy data" off \
 9 "Setup replication" off \
 2>&1 1>/dev/tty)
+
+# TODO for containers only, sudo required the hostname of the host to be added to
+# /etc/hosts of the container:
+# 127.0.0.1    hk-bu
+# otherwise it gave out errors each time you used it.
 
 if [ $? -ne 0 ]; then
 	# user cancelled
@@ -56,19 +62,19 @@ if [ $# -gt 1 ]; then
 fi
 
 # split space-delimited string into an array
-read -r -a ACTIONS <<< ${actions}
+read -r -a ACTIONS <<< "${actions}"
 # keep track of which action we're working on
 ACTIONITEM=0
 
 # first step: check we have all the required packages
 #dialog --extra-button --extra-label "Skip" --ok-label "Continue" --yesno "The first step is to install prerequisite software packages. Would you like to proceed with prerequisite package installation?" 20 80
 
-if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
-	"All actions done";
+if [ "${#ACTIONS[@]}" -lt "${ACTIONITEM}" ]; then
+	echo "All actions done";
 	exit 0;
 fi
 
-if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
+if [ "${ACTIONS[${ACTIONITEM}]}" -eq 1 ]; then
 	echo "Action 1: Install packages"
 	
 	exec 3< ./postgres_packages.txt  # open list of package names as file descriptor 3
@@ -77,7 +83,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	PACKAGES_TO_INSTALL=""
 	while read -r PACKAGE <&3; do
 		echo "checking status of package ${PACKAGE}"
-		STATUS=$(dpkg-query --show --showformat='${db:Status-Status}\n' ${PACKAGE} 2>/dev/null)
+		STATUS=$(dpkg-query --show --showformat='${db:Status-Status}\n' "${PACKAGE}" 2>/dev/null)
 		# STATUS may be 'installed', nothing, or 'not-installed'
 		if [ "${STATUS}" != "installed" ]; then
 			echo "marking to install"
@@ -94,10 +100,10 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	else
 		dialog --yesno "the following packages are to be installed:\n ${PACKAGES}" --yes-label "continue" --no-label "cancel" 20 80
 		if [ $? -eq 0 ]; then
-			apt-get install ${PACKAGES_TO_INSTALL} 2>&1 | dialog -title "installing..." --progressbox 20 80
+			apt-get install "${PACKAGES_TO_INSTALL}" 2>&1 | dialog -title "installing..." --progressbox 20 80
 			# n.b. programbox is the same as progressbox but requires 'ok' when you're done
 			# check the install succeeded
-			if [ ${PIPESTATUS[0]} -ne 0 ]; then
+			if [ "${PIPESTATUS[0]}" -ne 0 ]; then
 				dialog --infobox "Package installation failed, please investigate and retry" 20 80
 				echo "\n\n\nFailed command: 'apt-get install ${PACKAGES_TO_INSTALL}'"
 				exit 1
@@ -112,7 +118,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -124,13 +130,13 @@ fi
 SERVICENAME=$(systemctl list-unit-files | grep postgres | grep -v indirect)
 if [ ! -z "${SERVICENAME}" ]; then
 	# we found a service. the captured name actually contains its name and status:
-	POSTGRESSTATUS=`echo ${SERVICENAME} | cut -d' ' -f 2`
-	SERVICENAME=`echo ${SERVICENAME} | cut -d' ' -f 1`
+	POSTGRESSTATUS=`echo "${SERVICENAME}" | cut -d' ' -f 2`
+	SERVICENAME=`echo "${SERVICENAME}" | cut -d' ' -f 1`
 	# if it's disabled, enable it now
 	if [ "${POSTGRESSTATUS}" == "disabled" ]; then
 		dialog --yesno "postgres service is not configured to start on boot. Would you like to enable this now?" 20 80
 		if [ $? -eq 0 ]; then
-			sudo -E systemctl enable ${SERVICENAME}
+			systemctl enable ${SERVICENAME}
 			if [ $? -ne 0 ]; then
 				dialog --msgbox "Failed to enable postgresql service; postgres may not start on boot" 20 80
 				# we won't exit, since this shouldn't interfere with installation for now
@@ -147,10 +153,11 @@ fi
 # we'll need pg_ctl for later steps, and we should add the binary and lib directories
 # to the environmental setup script we're building; let's do that now
 PGCTLBIN=$(which pg_ctl)  # see if we can find pg_ctl on current PATH
+PGVER=$(pg_lsclusters | tail -n 1 | cut -f 1 -d ' ')
 if [ -z "${PGCTLBIN}" ]; then    # if we didn't find it (which we probably didn't)
-	PGCTLBIN=$(dpkg -L postgresql-11 | grep -P '.*/pg_ctl$')  # find it from the list of installed files
-	PGBINDIR=$(dirname ${PGCTLBIN})                           # grab the path
+	PGCTLBIN=$(dpkg -L postgresql-${PGVER} | grep -P '.*/pg_ctl$')  # find it from the list of installed files
 fi
+PGBINDIR=$(dirname ${PGCTLBIN})                           # grab the path
 if [ -z "${PGBINDIR}" ]; then
 	dialog --infobox "Failed to locate pg_ctl; check postgres installation" 20 80
 	exit 1
@@ -167,9 +174,25 @@ if [ -d "${PGLIBDIR}" ] && [ `grep "${PGLIBDIR}" <<< "${LD_LIBRARY_PATH}" &>/dev
 	echo "LD_LIBRARY_PATH=${PGLIBDIR}"':${LD_LIBRARY_PATH}' >> ${PG_SOURCE_SCRIPT}
 fi
 
-# set password on postgres user account
+# some containers + postgres versions, require the locale to be set for postgres to be happy
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
-	echo "Action 2: set password on postgres user account"
+	echo "Action 2: set locale"
+	localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+	
+	# move to next action item
+	let ACTIONITEM=${ACTIONITEM}+1
+	
+	# exit if we're done
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
+		echo "All actions done";
+		exit 0;
+	fi
+	
+fi
+
+# set password on postgres user account
+if [ ${ACTIONS[${ACTIONITEM}]} -eq 99 ]; then
+	echo "Action 99: set password on postgres user account"
 	
 	# sanity check
 	id -u postgres &>/dev/null
@@ -180,7 +203,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 	
 	# when extra-button is added, apprently the default yes no buttons become ok cancel,
 	# so need to set ok-label and cancel-label instead of yes-label and no-label.
-	# also extra buttin is placed so that button order is 'OK' 'Extra' 'Cancel'
+	# also extra button is placed so that button order is 'OK' 'Extra' 'Cancel'
 	dialog --ok-label 'Enter password' --extra-button --extra-label 'Auto-Generate' --extra-button \
 	       --cancel-label 'Skip' --yesno "`echo "Setting a password on the postgres user account." \
 	                                              "Enter a password manually or auto-generate?"`" 20 80
@@ -190,10 +213,10 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 		step=0
 		while [ ${step} -lt 3 ]; do
 			if [ ${step} -eq 0 ]; then
-				firstentry=$(dialog --insecure --passwordbox "Enter postgres user password" 2>&1 1>/dev/tty)
+				firstentry=$(dialog --insecure --passwordbox "Enter postgres user password" 2>&1 1>/dev/tty 20 80)
 				step=1
 			elif [ ${step} -eq 1 ]; then
-				secondentry=$(dialog --insecure --passwordbox "Enter password again" 2>&1 1>/dev/tty)
+				secondentry=$(dialog --insecure --passwordbox "Enter password again" 2>&1 1>/dev/tty 20 80)
 				step=2
 			elif [ "${firstentry}" != "${secondentry}" ]; then
 				dialog --msgbox "passwords do not match" 20 80
@@ -206,7 +229,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 		
 		# see if the user wants to record the postgres password...
 		# we'll need to do this if we're generating a password so that the user knows what it is...
-		SAVEPASS=`dialog --yesno "Save password in /home/postgres/postgres_user_password?"` 20 80
+		SAVEPASS=`dialog --yesno "Save password in a file for reference?" 20 80 2>&1 1>/dev/tty`
 	elif [ $RET -eq 3 ]; then
 		# generate password automatically
 		PGUSERPASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-32} | head -n 1)
@@ -217,17 +240,43 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 	fi
 	
 	# record the password if requested (or auto-generated)
-	if [ ${SAVEPASS} -eq 0 ]; then
-		dialog --msgbox "password will be written to /home/postgres/postgres_user_password" 20 80
-		echo ${PGUSERPASS} > /home/postgres/postgres_user_password
-		chown postgres /home/postgres/postgres_user_password
-		chmod 700 /home/postgres/postgres_user_password
+	if [ "${SAVEPASS:-1}" -eq 0 ]; then
+		SAVELOC="/home/postgres/postgres_user_password";
+		locok=0;
+		while [ "${locok}" -eq 0 ]; do
+			SAVELOC=$(dialog --title "Where would you like to save the password?" \
+			                --dselect "$SAVELOC" 20 80 2>&1 1>/dev/tty)
+			if [ ! -d $(dirname ${SAVELOC}) ]; then
+				dialog --infobox "Save location ${SAVELOC} does not exist, please choose an existing directory" 20 80
+			else
+				locok=1;
+				break;
+			fi
+		done
+		if [ -d "${SAVELOC}" ]; then
+			SAVELOC="${SAVELOC}/postgres_user_password";
+		fi
+		if [ -f "${SAVELOC}" ]; then
+			let n=0;
+			while [ true ]; do
+				if [ -n "${SAVELOC}_${n}" ]; then
+					SAVELOCNEW="${SAVELOC}_${n}"
+					break;
+				fi
+			done
+			dialog --msgbox "file ${SAVELOC} already exists, saving to ${SAVELOCNEW}" 20 80
+			SAVELOC="${SAVELOCNEW}"
+		fi
+		echo "${PGUSERPASS}" > "${SAVELOC}"
+		chown postgres "${SAVELOC}"
+		chmod 700 "${SAVELOC}"
 	fi
 
-	if [ ${NOPASS:-0} -eq 0 ]; then
+	if [ "${NOPASS:-0}" -eq 0 ]; then
 		# do the actual password change
-		echo "postgres:${PGUSERPASS}" | chpasswd
-		if [$? -ne 0 ]; then
+		# apparently this is a bad idea: https://serverfault.com/a/325596
+		#echo "postgres:${PGUSERPASS}" | chpasswd
+		if [ "$?" -ne 0 ]; then
 			dialog --infobox "Error $? setting password for postgres user account!" 20 80
 			#exit 1    # maybe don't exit... again shouldn't interfere with installation
 		fi
@@ -237,8 +286,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -266,7 +315,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -307,7 +356,7 @@ elif [ ${NCLUSTERS} -eq 1 ]; then
 		# if we're not going to be using it, should we stop this cluster?
 		dialog --yesno "Should the existing database cluster be stopped?" 20 80
 		if [ $? -eq 0 ]; then
-			sudo -E -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title \
+			sudo -E -u postgres ${PGCTLBIN} stop -D ${PGDATA} 2>&1 | dialog --title \
 			        "Stopping default database cluster..." --progressbox 20 80
 			if [ ${PIPESTATUS[0]} -ne 0 ]; then
 				sleep 2 # let user inspect output for a bit?
@@ -340,6 +389,7 @@ else
 		PGDATA="${VAR}"
 	fi
 fi
+
 # if we have a cluster, check if it's running
 if [ ! -z "${PGDATA}" ]; then
 	PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
@@ -451,7 +501,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 		                        --title "Initializing new database cluster..." 20 80
 		
 		if [ ${PIPESTATUS[0]} -ne 0 ]; then
-			dialog --infobox "Failed to initialize database cluster, aborting"
+			dialog --infobox "Failed to initialize database cluster, aborting" 20 80
 			echo "Failed command: `history | tail -n 3 | head -n 1`"
 			exit 1
 		fi
@@ -463,7 +513,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 		dialog --infobox "Updating systemd startup files to reflect new cluster location" 20 80
 		SERVICENAME=$(systemctl list-unit-files | grep postgres | grep -v indirect | cut -d' ' -f 1)
 		mkdir -p /etc/systemd/system/${SERVICENAME}.d/
-		echo "[Service]" >> /etc/systemd/system/postgresql-12.serviced/override.conf
+		echo "[Service]" >> /etc/systemd/system/postgresql-${PGVER}.serviced/override.conf
 		echo "Environment=PGDATA=${PGDATA}" >> /etc/systemd/system/${SERVICENAME}.serviced/override.conf
 		# XXX does this prevent other clusters starting on boot? what if we don't want that?
 		
@@ -500,7 +550,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 					                       "This must be done while the database service is stopped."`" 20 80
 				else
 					# stop the DB
-					sudo -E  -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title \
+					sudo -E  -u postgres ${PGCTLBIN} stop -D ${PGDATA} 2>&1 | dialog --title \
 					        "Stopping default database cluster..." --progressbox 20 80
 					if [ ${PIPESTATUS[0]} -ne 0 ]; then
 						sleep 2 # let user inspect output for a bit?
@@ -526,7 +576,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -538,25 +588,25 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	
 	# replace configuration files
 	dialog --infobox "Backing up postgresql.conf, pg_ident.conf, pg_hba.conf to *.bk" 20 80
-	sudo -E -u postgres mv ${PG_DATA}/postgresql.conf ${PG_DATA}/postgresql.conf.bk
-	sudo -E -u postgres mv ${PG_DATA}/pg_ident.conf ${PG_DATA}/pg_ident.conf.bk
-	sudo -E -u postgres mv ${PG_DATA}/pg_hba.conf ${PG_DATA}/pg_hba.conf.bk
+	sudo -E -u postgres mv ${PGDATA}/postgresql.conf ${PGDATA}/postgresql.conf.bk
+	sudo -E -u postgres mv ${PGDATA}/pg_ident.conf ${PGDATA}/pg_ident.conf.bk
+	sudo -E -u postgres mv ${PGDATA}/pg_hba.conf ${PGDATA}/pg_hba.conf.bk
 	
 	# copy in new ones
-	sudo -E -u postgres cp ./postgresql.conf ${PG_DATA}/postgresql.conf
-	sudo -E -u postgres cp ./pg_ident.conf ${PG_DATA}/pg_ident.conf
-	sudo -E -u postgres cp ./pg_hba.conf ${PG_DATA}/pg_hba.conf
+	sudo -E -u postgres cp ./postgresql.conf ${PGDATA}/postgresql.conf
+	sudo -E -u postgres cp ./pg_ident.conf ${PGDATA}/pg_ident.conf
+	sudo -E -u postgres cp ./pg_hba.conf ${PGDATA}/pg_hba.conf
 	
 	# some of these changes can be registered by sending SIGINT to the postgres service,
 	# others can be registered by doing `pg_ctl reload`, but some of them need a full stop/restart.
 	if [ ${PGSTATUS} -eq 1 ]; then
-		sudo -E -u postgres pg_ctl stop -D ${PGDATA} 2>&1 | dialog --title "Stopping database cluster..." \
+		sudo -E -u postgres ${PGCTLBIN} stop -D ${PGDATA} 2>&1 | dialog --title "Stopping database cluster..." \
 			                                                    --progressbox 20 80
 		if [ ${PIPESTATUS[0]} -ne 0 ]; then
 			sleep 2 # let user inspect output for a bit?
 			dialog --msgbox "`echo "Error stopping database cluster, some configuration changes " \
 				                   "may not take effect until the database has been properly stopped " \
-				                   "and restarted"`"
+				                   "and restarted"`" 20 80
 		fi
 	fi
 	
@@ -564,7 +614,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -573,16 +623,17 @@ fi
 
 # the next set of actions require the db to be running
 # check if it's already running
-sudo -E -u postgres /usr/lib/postgresql/11/bin/pg_ctl -D ${PGDATA} status | grep "running"
+sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status | grep "running"
 
 # start it if necessary
 if [ $? -ne 0 ]; then
 	# start it up
-	sudo -E -u postgres pg_ctl start 2>&1 | dialog --title "Starting database cluster..." --progressbox 20 80
+	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} start 2>&1 | dialog --title "Starting database cluster..." --progressbox 20 80
 	# check for errors
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		sleep 2 # let user inspect output for a bit?
 		dialog --infobox "Error starting database cluster!" 20 80
+		echo "error starting database!"
 		exit 1
 	fi
 	# TODO: can check whether a server is yet up and running with `pg_isready`.
@@ -596,6 +647,7 @@ fi
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 6 ]; then
 	
 	# call another script to do the heavy lifting
+	echo "calling buildtables.sh"
 	./build_tables.sh
 	if [ $? -ne 0 ]; then
 		dialog --infobox "Error creating database structure!" 20 80
@@ -606,7 +658,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 6 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -627,7 +679,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 7 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -645,7 +697,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 8 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi
@@ -663,7 +715,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 9 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -ge ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
 		"All actions done";
 		exit 0;
 	fi

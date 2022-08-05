@@ -8,6 +8,9 @@ alias dialog='dialog --backtitle "Postgres Setup" --aspect 100 --cr-wrap'
 BUILDSTEPS=build_steps.sh
 echo "" > ${BUILDSTEPS}
 
+# set default host to local unix port
+export PGHOST="/tmp"
+
 DATABASES=$(ls ./dbstructure)
 let i=0
 for DB in ${DATABASES[@]}; do
@@ -34,7 +37,7 @@ for DB in ${DATABASES[@]}; do
 				echo "Database ${NEXT} already exists"
 				# TODO ask to drop and recreate it?
 			else
-				dialog --msgbox "Error creating database ${NEXT}" 20 80
+				dialog --msgbox "Error '${RET}' creating database ${NEXT}" 20 80
 				exit 1
 			fi
 		fi

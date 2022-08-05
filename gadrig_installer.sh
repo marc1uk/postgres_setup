@@ -35,8 +35,14 @@ ACTIONITEM=0
 
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	
-	#exec 3< ./required_packages.txt  # open list of package names as file descriptor 3
-	exec 3< ./test_packages.txt  # open list of package names as file descriptor 3     # TODO FIXME DEBUG
+	PACKAGEFILE="./required_packages.txt"
+	#PACKAGEFILE="./test_packages.txt"     # debug
+	if [ ! -f ${PACKAGEFILE} ]; then
+		dialog --infobox "failed to find list of required packages, '${PACKAGEFILE}'" 20 80
+		echo "file containing list of required packages, '"${PACKAGEFILE}"', does not exist!"
+		exit 1
+	fi
+	exec 3< ${PACKAGEFILE}  # open list of package names as file descriptor 3
 	
 	# loop over them and check their installation status, building a list of those that need to be installed.
 	PACKAGES_TO_INSTALL=""
@@ -71,8 +77,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 	fi
 	
 	# not sure if this is required; in a buster container (not raspbian) after initially installing g++8,
-	# later builds failed because there was no /usr/bin/++ 
-	if [ ! -f /usr/bin/gcc ];
+	# later builds failed because there was no /usr/bin/g++
+	if [ ! -f /usr/bin/gcc ]; then
 		ln -s /usr/bin/gcc8 /usr/bin/gcc
 	fi
 	if [ ! -f /usr/bin/g++ ]; then
@@ -144,13 +150,16 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 		exit 1
 	fi
 	# one thing not done is set the default postgres user, but we can do this
-	echo 'PG_USER=postgres' >> /home/pi/setup_postgres.sh
+	if [ ! -f $HOME/setup_postgres.sh ]; then
+		touch $HOME/setup_postgres.sh
+	fi
+	echo 'PG_USER=postgres' >> $HOME/setup_postgres.sh
 	
 	# move to next action item
 	let ACTIONITEM=${ACTIONITEM}+1
 fi
 
-if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
+if [ ${ACTIONS[${ACTIONITEM}]:-0} -eq 4 ]; then
 	# set up resource monitoring cron job
 	# write out current crontab
 	ERR=$(crontab -l 2>&1 > mycron)

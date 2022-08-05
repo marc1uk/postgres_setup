@@ -24,3 +24,5 @@ libfftw3-bin
 wiringpi
 libusb-dev
 bc
+sudo
+openconnect
