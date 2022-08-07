@@ -32,7 +32,6 @@ This script will walk you through the process of setting up the raspberry pi for
 # run a checklist dialog to see what steps to perform; 
 actions=$(dialog --checklist "Please select the actions to carry out" 20 80 9 \
 1 "Install postgres" on \
-#2 "Set password for postgres user" on \   ## apparently this is bad for security
 2 "Set locale" off \
 3 "Add admin accounts to the postgres group" on \
 4 "Create database cluster" on \
@@ -42,6 +41,7 @@ actions=$(dialog --checklist "Please select the actions to carry out" 20 80 9 \
 8 "Fill dummy data" off \
 9 "Setup replication" off \
 2>&1 1>/dev/tty)
+#99 "Set password for postgres user" on \   ## apparently this is bad for security
 
 # TODO for containers only, sudo required the hostname of the host to be added to
 # /etc/hosts of the container:
@@ -392,11 +392,14 @@ fi
 
 # if we have a cluster, check if it's running
 if [ ! -z "${PGDATA}" ]; then
-	PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
-	PGSTATUS=`[ ${PGSTATUS} == "online" ]; echo $?`
+	# for some reason (at least in the container?) this shows "down", even when it's online!?
+	#PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
+	#PGSTATUS=`[ ${PGSTATUS} == "online" ]; echo $?`
+	PGSTATUS=$(sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status >/dev/null 2>&1; echo $?)
 else
-	PGSTATUS=0
+	PGSTATUS=1
 fi
+# PGSTATUS=0 for running
 
 # create databases
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
@@ -537,7 +540,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 			fi
 			
 			# double check they actually chose a location different to the default
-			if [ ${PGSTATUS} -eq 1 ] && [ "${DB_WAL}" != "${PGDATA}/pg_wal" ]; then
+			if [ ${PGSTATUS} -eq 0 ] && [ "${DB_WAL}" != "${PGDATA}/pg_wal" ]; then
 				# they did, and the db is running. we need to stop the database service for this.
 				dialog --yesno "`echo "The database service must be briefly stopped to move "
 				               "the WAL file location. Continue?"`" \
@@ -599,8 +602,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	
 	# some of these changes can be registered by sending SIGINT to the postgres service,
 	# others can be registered by doing `pg_ctl reload`, but some of them need a full stop/restart.
-	if [ ${PGSTATUS} -eq 1 ]; then
-		sudo -E -u postgres ${PGCTLBIN} stop -D ${PGDATA} 2>&1 | dialog --title "Stopping database cluster..." \
+	if [ ${PGSTATUS} -eq 0 ]; then
+		sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} stop 2>&1 | dialog --title "Stopping database cluster..." \
 			                                                    --progressbox 20 80
 		if [ ${PIPESTATUS[0]} -ne 0 ]; then
 			sleep 2 # let user inspect output for a bit?
@@ -623,12 +626,24 @@ fi
 
 # the next set of actions require the db to be running
 # check if it's already running
-sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status | grep "running"
+echo "checking if server is running"
+# not reliable in container?
+#PGCLUSTERS=$(pg_lsclusters | tail -n +2)
+#PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
+#PGSTATUS=`[ ${PGSTATUS} == "online" ]; echo $?`
+PGSTATUS=$(sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status >/dev/null 2>&1; echo $?)
+echo "PGSTATUS IS '${PGSTATUS}'"
+# PGSTATUS=0 means running
 
 # start it if necessary
-if [ $? -ne 0 ]; then
+if [ ${PGSTATUS} -ne 0 ]; then
 	# start it up
-	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} start 2>&1 | dialog --title "Starting database cluster..." --progressbox 20 80
+	dialog --title "Starting database cluster..." --pause 20 80 3
+	# trying to pipe the output of pg_ctl into dialog --progressbox fails because pg_ctl sees it doesn't
+	# have an actual terminal, and so does not return and terminate.
+	# see https://dba.stackexchange.com/a/243109
+	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} start
+	echo "checking for errors in starting"
 	# check for errors
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		sleep 2 # let user inspect output for a bit?
@@ -640,6 +655,11 @@ if [ $? -ne 0 ]; then
 	# return value of 0 means yes, 1 means server responded that is rejecting connections
 	# (e.g. restoring but not yet in a consistent state), 2 means no response.
 	# keep polling until it is.
+	echo "started successfully: status is now:"
+        sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status
+else
+	echo "server is running"
+        sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status
 fi
 
 
@@ -730,7 +750,7 @@ PGPORT=`pg_lsclusters | grep ${PGDATA} | awk '{print $3 }'`
 echo "PGPORT=${PGPORT}" >> ${PG_SOURCE_SCRIPT}
 PGHOST=`grep -e '^unix_socket_directories' /etc/postgresql/11/main/postgresql.conf | awk '{ print $3 }'`
 echo "PGHOST=${PGHOST}" >> ${PG_SOURCE_SCRIPT}            # *should* work for local connections...
-#echo "PGUSER=postgres" >> ${PG_SOURCE_SCRIPT}            # maybe not what the user wants...?
+echo "PGUSER=postgres" >> ${PG_SOURCE_SCRIPT}            # maybe not what the user wants...?
 #echo "PGPASSWORD=${PGPASSWORD}" >> ${PG_SOURCE_SCRIPT}   # not secure
 
 # slightly more secure - store the database password in a ~/.pgpass file

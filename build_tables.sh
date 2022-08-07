@@ -120,7 +120,7 @@ for NEXTDB in ${DBARRAY[@]}; do
 	done  # end loop over tables (files in this database folder)
 	
 	dialog --msgbox "`echo "Completed table creation. Resulting structure:\n" \
-	                       "$(echo \"\dt\" | psql -d \"dbname=${NEXTDB}\")"`" 20 80
+	                       "$(echo \"\dt\" | sudo -E -u postgres psql -d \"dbname=${NEXTDB}\")"`" 20 80
 	
 done  # end loop over databases (folders in ./dbstructure)
 
