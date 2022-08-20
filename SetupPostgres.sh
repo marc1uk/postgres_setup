@@ -322,8 +322,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 	
 fi
 
-# The next set of steps require the database cluser to be running, and we also need to
-# secify its data directory, to identify it in case there are multiple
+# later steps will require the database cluser to be running, and we also need to
+# secify its data directory, to identify it in case there are multiple database clusters
 #PGDATA=$(psql -t -c "show data_directory;" 2>/dev/null | head -n 1)
 # the above requires the db to be running, which it may not be
 # a better way is to use pg_lsclusters, a helper function (hopefully provided by all distros)
@@ -373,35 +373,39 @@ else
 		for LINE in "${PGCLUSTERS[@]}"; do
 				STR=`echo ${LINE} | awk '{ print $6 }'`
 				PGCLUSTERARR[$i]=$STR
-				echo "'"$STR"'" $i;
+				echo $STR $i;
 				let i=$i+1;
 		done;
 	)
 	NUMOPTS=`expr ${NCLUSTERS} + 1`  # one extra for the option of a new cluster
-	CLUSTERNUM=$(dialog --menu "Found multiple database clusters; which would you like to set up?" \
+	CLUSTERDATA=$(dialog --menu "Found multiple database clusters; which would you like to set up?" \
 	             20 80 ${NUMOPTS} ${MENU} "New cluster" $NCLUSTERS 2>&1 1>/dev/tty)
 	if [ $? -ne 0 ]; then
 		echo "Aborted"
 		exit 1
-	elif [ "${VAR}" == "New cluster" ]; then
+	elif [ "${CLUSTERDATA}" == "New cluster" ]; then
 		PGDATA=""
 	else
-		PGDATA="${VAR}"
+		PGDATA="${CLUSTERDATA}"
 	fi
 fi
 
-# if we have a cluster, check if it's running
+# if we have a cluster, check if it's running and get local connection details
 if [ ! -z "${PGDATA}" ]; then
 	# for some reason (at least in the container?) this shows "down", even when it's online!?
 	#PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
 	#PGSTATUS=`[ ${PGSTATUS} == "online" ]; echo $?`
 	PGSTATUS=$(sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status >/dev/null 2>&1; echo $?)
+	
+	# we'll also get the local unix socket and port for connecting to it, as these vary depending on installation
+	PGHOST=$(pg_conftool show all | grep unix_socket_directories | awk '{ print $3 }' | tr -d "'")
+	PGPORT=$(pg_conftool show all | grep port | awk '{ print $3 }')
 else
 	PGSTATUS=1
 fi
 # PGSTATUS=0 for running
 
-# create databases
+# create database cluster
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	
 	# if we're making a new cluster...
@@ -585,15 +589,102 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	fi
 	
 fi
+# we should at this point have a database cluster that exists in $PGDATA.
+# update our list of clusters in case we just made it.
+PGCLUSTERS=$(pg_lsclusters | tail -n +2)
+CLUSTERNAME=$(echo $PGCLUSTERS | grep ${PGDATA} | awk '{ print $2 }')
 
 # install configuration files
+# note postgresql.conf is the configuration for the CLUSTER, not the database.
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	
-	# replace configuration files
-	dialog --infobox "Backing up postgresql.conf, pg_ident.conf, pg_hba.conf to *.bk" 20 80
-	sudo -E -u postgres mv ${PGDATA}/postgresql.conf ${PGDATA}/postgresql.conf.bk
-	sudo -E -u postgres mv ${PGDATA}/pg_ident.conf ${PGDATA}/pg_ident.conf.bk
-	sudo -E -u postgres mv ${PGDATA}/pg_hba.conf ${PGDATA}/pg_hba.conf.bk
+	# first let's backup the current configuration file. To do that, we first need to find it.
+	# It's *usually* in $PGDATA, but not always.
+	# If it isn't there it needs to be passed as an argument when starting the database,
+	# e.g `pg_ctl -D ${PGDATA} -o '-c config_file=/etc/postgresql/11/main/postgresql.conf' start`
+	# This is in fact the way it's done with the default database created during installation.
+	# To find out where it is we have two options, both of which require the DB to be running....
+	if [ ${PGSTATUS} -eq 0 ]; then
+		# method 1 : note we can ONLY use this method if the config file location was given on startup.
+		# The advantage is we can use PGDATA to specify the database with `-D <PGDATADIR>`
+		CONFIG=$(sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status | tail -n +2 | awk '{ print $5 }')
+		# this should return something like "config_file=/path/to/postgresql.conf"
+		# (including enclosing quotations) from which we then strip out the file
+		CONFIGFILE=${CONFIG:13:-1}
+		
+		# fallback
+		if [ -z "${CONFIGFILE}" ]; then
+			# method 2: if we know a database name we can optionally specify it with `-d <dbname>`
+			# but for now we don't so let's just leave it off. if PGDATA is correct we should query
+			# the correct database cluster, so it should be right.
+			#CONFIGFILE=$(psql -t -c "SELECT setting FROM pg_settings WHERE name = 'config_file'")
+			# or more simply
+			CONFIGFILE=$(sudo -E -u postgres psql -t -c "SHOW config_file")
+		fi
+		
+	else if [ -f ${PGDATA}/postgresql.conf ]; then
+		# if it's not running but we have one in $PGDATA, assume that's it.
+		CONFIGFILE=${PGDATA}/postgresql.conf
+	else 
+		# if it's not running and we don't have one in PGDATA, we have two options:
+		# 1. guess based on "standard" location (/etc/postgresql/${PGVER}/${CLUSTERNAME}/postgresql.conf)
+		# 2. start the database so that we can query it
+		
+		# first try the default install directory.
+		CONFIGFILE="/etc/postgresql/${PGVER}/${CLUSTERNAME}/postgresql.conf"
+		ls ${CONFIGFILE} > /dev/null 2>/dev/null
+		if [ $? -ne 0 ]; then
+			
+			# nope that didn't exist. We'll have to start it up and query it.
+			dialog --infobox "Can't find postgresql.conf, starting database cluster to query it..." 20 80
+			sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} start | dialog --title "Stopping database cluster..." \
+			                                                            --progressbox 20 80
+			# note that pg_ctlcluster recommends that we instead use systemctl:
+			#sudo systemctl start postgresql@${PGVER}-${CLUSTERNAME}  | dialog --title "Stopping database cluster..." \
+			#                                                                  --progressbox 20 80
+			if [ $? -eq 0 ]; then
+				# wait up to 5s for it to be ready
+				for i in `seq 1 5`; do
+					PGSTATUS=$(sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status >/dev/null 2>&1; echo $?)
+					if [ ${PGSTATUS} -eq 0 ]; then
+						break;
+						sleep 1
+					fi
+				done;
+				# try to query it
+				if [ ${PGSTATUS} -eq 0 ]; then
+					CONFIGFILE=$(sudo -E -u postgres psql -t -c "SHOW config_file")
+				else
+					dialog --msgbox "`echo "Could not start database to query for postgresql.conf file location.\n" \
+					                       "If you wish to back the current configuration up, " \
+					                       "please locate the file and do so now."`" 20 80
+				fi
+			fi
+		fi
+	fi
+	
+	# see if we were able to identify the current config file
+	if [ ! -z "${CONFIGFILE}" ]; then
+		
+		# locate the pg_ident.conf and pg_hba.conf files. This doesn't require the db to be running.
+		PGIDENT=$(pg_conftool ${PGVER} ${CLUSTERNAME} show ident_file | awk '{ print $3 }' | tr -d "'")
+		PGHBA=$(pg_conftool ${PGVER} ${CLUSTERNAME} show hba_file | awk '{ print $3 }' | tr -d "'")
+		
+		# make a unique backup name (just in case this script is run multiple times)
+		let BACKUP_NUM=0
+		while [ -f ${PGDATA}/postgresql.conf.bk_${BACKUP_NUM} ] || \
+			  [ -f ${PGDATA}/pg_ident.conf.bk_${BACKUP_NUM} ] || \
+			  [ -f ${PGDATA}/pg_hba.conf.bk_${BACKUP_NUM} ]; do
+			  let BACKUP_NUM=${BACKUP_NUM}+1
+		done
+		
+		# make backups
+		dialog --infobox "Backing up postgresql.conf, pg_ident.conf, pg_hba.conf to *.bk_${BACKUP_NUM}" 20 80
+		sudo -E -u postgres mv ${CONFIGFILE} ${PGDATA}/postgresql.conf.bk_${BACKUP_NUM}
+		sudo -E -u postgres mv ${PGIDENT} ${PGDATA}/pg_ident.conf.bk_${BACKUP_NUM}
+		sudo -E -u postgres mv ${PGHBA} ${PGDATA}/pg_hba.conf.bk_${BACKUP_NUM}
+		
+	fi
 	
 	# copy in new ones
 	sudo -E -u postgres cp ./postgresql.conf ${PGDATA}/postgresql.conf
@@ -604,12 +695,12 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	# others can be registered by doing `pg_ctl reload`, but some of them need a full stop/restart.
 	if [ ${PGSTATUS} -eq 0 ]; then
 		sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} stop 2>&1 | dialog --title "Stopping database cluster..." \
-			                                                    --progressbox 20 80
+		                                                                --progressbox 20 80
 		if [ ${PIPESTATUS[0]} -ne 0 ]; then
 			sleep 2 # let user inspect output for a bit?
 			dialog --msgbox "`echo "Error stopping database cluster, some configuration changes " \
-				                   "may not take effect until the database has been properly stopped " \
-				                   "and restarted"`" 20 80
+			                       "may not take effect until the database has been properly stopped " \
+			                       "and restarted"`" 20 80
 		fi
 	fi
 	
@@ -632,22 +723,25 @@ echo "checking if server is running"
 #PGSTATUS=$(echo ${PGCLUSTERS} | grep ${PGDATA} | awk '{ print $4 }')
 #PGSTATUS=`[ ${PGSTATUS} == "online" ]; echo $?`
 PGSTATUS=$(sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status >/dev/null 2>&1; echo $?)
-echo "PGSTATUS IS '${PGSTATUS}'"
+if [ ${PGSTATUS} -eq 0 ]; then
+	echo "server is running"
+else
+	echo "server is stopped"
+fi
 # PGSTATUS=0 means running
 
 # start it if necessary
 if [ ${PGSTATUS} -ne 0 ]; then
 	# start it up
-	dialog --title "Starting database cluster..." --pause 20 80 3
+	dialog "Starting database cluster..." --pause 20 80 3
 	# trying to pipe the output of pg_ctl into dialog --progressbox fails because pg_ctl sees it doesn't
 	# have an actual terminal, and so does not return and terminate.
 	# see https://dba.stackexchange.com/a/243109
-	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} start
-	echo "checking for errors in starting"
+	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} start -l /tmp/pgstart.log
 	# check for errors
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		sleep 2 # let user inspect output for a bit?
-		dialog --infobox "Error starting database cluster!" 20 80
+		dialog --infobox "Error starting database cluster! See /tmp/pgstart.log" 20 80
 		echo "error starting database!"
 		exit 1
 	fi
@@ -656,12 +750,16 @@ if [ ${PGSTATUS} -ne 0 ]; then
 	# (e.g. restoring but not yet in a consistent state), 2 means no response.
 	# keep polling until it is.
 	echo "started successfully: status is now:"
-        sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status
+	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status
 else
 	echo "server is running"
-        sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status
+	sudo -E -u postgres ${PGCTLBIN} -D ${PGDATA} status
 fi
 
+# we may have altered the connection details if we updated the postgresql.conf
+# so re-query those to ensure we can connect to the database for the next steps
+PGHOST=$(pg_conftool ${PGVER} ${CLUSTERNAME} show all | grep unix_socket_directories | awk '{ print $3 }' | tr -d "'")
+PGPORT=$(pg_conftool ${PGVER} ${CLUSTERNAME} show all | grep port | awk '{ print $3 }')
 
 # build databases
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 6 ]; then
@@ -745,12 +843,10 @@ fi
 # export settings to connect for future setup
 echo "PG_COLOR=always" >> ${PG_SOURCE_SCRIPT}
 export "PGDATA=${PGDATA}" >> ${PG_SOURCE_SCRIPT}
-PGPORT=`pg_lsclusters | grep ${PGDATA} | awk '{print $3 }'`
 #echo "PGDATABASE=${DBNAME}" >> ${PG_SOURCE_SCRIPT}       # TODO ask user which db should be default?
 echo "PGPORT=${PGPORT}" >> ${PG_SOURCE_SCRIPT}
-PGHOST=`grep -e '^unix_socket_directories' /etc/postgresql/11/main/postgresql.conf | awk '{ print $3 }'`
 echo "PGHOST=${PGHOST}" >> ${PG_SOURCE_SCRIPT}            # *should* work for local connections...
-echo "PGUSER=postgres" >> ${PG_SOURCE_SCRIPT}            # maybe not what the user wants...?
+echo "PGUSER=postgres" >> ${PG_SOURCE_SCRIPT}             # maybe not what the user wants...?
 #echo "PGPASSWORD=${PGPASSWORD}" >> ${PG_SOURCE_SCRIPT}   # not secure
 
 # slightly more secure - store the database password in a ~/.pgpass file

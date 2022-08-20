@@ -16,7 +16,7 @@ let i=0
 for DB in ${DATABASES[@]}; do
 	# strip preceding 'dbstructure/' from directory names
 	NEXT=$(basename "${DB}");
-
+	
 	# confirm
 	CMD="CREATE DATABASE ${NEXT}"
 	dialog --extra-button --extra-label "Skip" --yesno "create database ${NEXT}?" 20 80
@@ -30,17 +30,24 @@ for DB in ${DATABASES[@]}; do
 		# create the databases
 		echo "Creating database ${NEXT}"
 		DBARRAY[$i]=${NEXT}
-		RET=$(sudo -E -u postgres createdb ${NEXT} 2>&1)
-		#psql -U postgres -c "${CMD}"
-		if [ $? -ne 0 ]; then
-			if [ `echo "${RET}" | grep "already exists" &>/dev/null; echo $?` -eq 0 ]; then
-				echo "Database ${NEXT} already exists"
-				# TODO ask to drop and recreate it?
-			else
-				dialog --msgbox "Error '${RET}' creating database ${NEXT}" 20 80
-				exit 1
+		# check if it already exists first, otherwise it'll error
+		#psql --list -t | sed -z 's/+\n/+/g' | cut -d ' ' -f 2 | grep -w ${NEXT}
+		# explan: sed command removes psql line wrapping. cut then extracts first field (db name)
+		# then grep -w matches only whole word, so dbname must be a complete exact match.
+		#if [ $? -ne 0 ]; then
+			# no match: db doesn't exist
+			RET=$(sudo -E -u postgres createdb ${NEXT} 2>&1)
+			#psql -U postgres -c "${CMD}"
+			if [ $? -ne 0 ]; then
+				if [ `echo "${RET}" | grep "already exists" &>/dev/null; echo $?` -eq 0 ]; then
+					echo "Database ${NEXT} already exists"
+					# TODO ask to drop and recreate it?
+				else
+					dialog --msgbox "Error '${RET}' creating database ${NEXT}" 20 80
+					exit 1
+				fi
 			fi
-		fi
+		#fi
 	fi
 	let i=$i+1
 done
