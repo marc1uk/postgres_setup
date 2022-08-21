@@ -69,7 +69,7 @@ ACTIONITEM=0
 # first step: check we have all the required packages
 #dialog --extra-button --extra-label "Skip" --ok-label "Continue" --yesno "The first step is to install prerequisite software packages. Would you like to proceed with prerequisite package installation?" 20 80
 
-if [ "${#ACTIONS[@]}" -lt "${ACTIONITEM}" ]; then
+if [ "${#ACTIONS[@]}" -le "${ACTIONITEM}" ]; then
 	echo "All actions done";
 	exit 0;
 fi
@@ -118,8 +118,8 @@ if [ "${ACTIONS[${ACTIONITEM}]}" -eq 1 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -183,7 +183,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 2 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
 		echo "All actions done";
 		exit 0;
 	fi
@@ -271,7 +271,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 99 ]; then
 		chown postgres "${SAVELOC}"
 		chmod 700 "${SAVELOC}"
 	fi
-
+	
 	if [ "${NOPASS:-0}" -eq 0 ]; then
 		# do the actual password change
 		# apparently this is a bad idea: https://serverfault.com/a/325596
@@ -286,7 +286,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 99 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
 		echo "All actions done";
 		exit 0;
 	fi
@@ -315,8 +315,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 3 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -583,8 +583,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 4 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -622,7 +622,7 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 			CONFIGFILE=$(sudo -E -u postgres psql -t -c "SHOW config_file")
 		fi
 		
-	else if [ -f ${PGDATA}/postgresql.conf ]; then
+	elif [ -f ${PGDATA}/postgresql.conf ]; then
 		# if it's not running but we have one in $PGDATA, assume that's it.
 		CONFIGFILE=${PGDATA}/postgresql.conf
 	else 
@@ -669,6 +669,13 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 		# locate the pg_ident.conf and pg_hba.conf files. This doesn't require the db to be running.
 		PGIDENT=$(pg_conftool ${PGVER} ${CLUSTERNAME} show ident_file | awk '{ print $3 }' | tr -d "'")
 		PGHBA=$(pg_conftool ${PGVER} ${CLUSTERNAME} show hba_file | awk '{ print $3 }' | tr -d "'")
+		# fallback? not necessary...
+		if [ ! -f ${PGIDENT} ]; then
+			PGIDENT=${PGDATA}/pg_ident.conf
+		fi
+		if [ ! -f ${PGHBA} ]; then
+			PGHBA=${PGDATA}/pg_hba.conf
+		fi
 		
 		# make a unique backup name (just in case this script is run multiple times)
 		let BACKUP_NUM=0
@@ -680,9 +687,9 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 		
 		# make backups
 		dialog --infobox "Backing up postgresql.conf, pg_ident.conf, pg_hba.conf to *.bk_${BACKUP_NUM}" 20 80
-		sudo -E -u postgres mv ${CONFIGFILE} ${PGDATA}/postgresql.conf.bk_${BACKUP_NUM}
-		sudo -E -u postgres mv ${PGIDENT} ${PGDATA}/pg_ident.conf.bk_${BACKUP_NUM}
-		sudo -E -u postgres mv ${PGHBA} ${PGDATA}/pg_hba.conf.bk_${BACKUP_NUM}
+		sudo -E -u postgres cp ${CONFIGFILE} ${PGDATA}/postgresql.conf.bk_${BACKUP_NUM}
+		sudo -E -u postgres cp ${PGIDENT} ${PGDATA}/pg_ident.conf.bk_${BACKUP_NUM}
+		sudo -E -u postgres cp ${PGHBA} ${PGDATA}/pg_hba.conf.bk_${BACKUP_NUM}
 		
 	fi
 	
@@ -708,8 +715,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 5 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -733,7 +740,7 @@ fi
 # start it if necessary
 if [ ${PGSTATUS} -ne 0 ]; then
 	# start it up
-	dialog "Starting database cluster..." --pause 20 80 3
+	dialog --pause "Starting database cluster..." 20 80 3
 	# trying to pipe the output of pg_ctl into dialog --progressbox fails because pg_ctl sees it doesn't
 	# have an actual terminal, and so does not return and terminate.
 	# see https://dba.stackexchange.com/a/243109
@@ -758,8 +765,9 @@ fi
 
 # we may have altered the connection details if we updated the postgresql.conf
 # so re-query those to ensure we can connect to the database for the next steps
-PGHOST=$(pg_conftool ${PGVER} ${CLUSTERNAME} show all | grep unix_socket_directories | awk '{ print $3 }' | tr -d "'")
-PGPORT=$(pg_conftool ${PGVER} ${CLUSTERNAME} show all | grep port | awk '{ print $3 }')
+export PGHOST=$(pg_conftool ${PGVER} ${CLUSTERNAME} show all | grep unix_socket_directories | awk '{ print $3 }' | tr -d "'")
+export PGPORT=$(pg_conftool ${PGVER} ${CLUSTERNAME} show all | grep port | awk '{ print $3 }')
+#echo "after updating config file, connection details are PGHOST=${PGHOST}, PGPORT=${PGPORT}"
 
 # build databases
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 6 ]; then
@@ -776,8 +784,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 6 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -797,8 +805,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 7 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
@@ -815,14 +823,14 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 8 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	
 fi
 
-# fill with random dummy data, for testing
+# setup replication
 if [ ${ACTIONS[${ACTIONITEM}]} -eq 9 ]; then
 	./setup_replication.sh
 	if [ $? -ne 0 ]; then
@@ -833,8 +841,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 9 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 	
 	# exit if we're done
-	if [ ${#ACTIONS[@]} -lt ${ACTIONITEM} ]; then
-		"All actions done";
+	if [ ${#ACTIONS[@]} -le ${ACTIONITEM} ]; then
+		echo "All actions done";
 		exit 0;
 	fi
 	

@@ -8,9 +8,6 @@ alias dialog='dialog --backtitle "Postgres Setup" --aspect 100 --cr-wrap'
 BUILDSTEPS=build_steps.sh
 echo "" > ${BUILDSTEPS}
 
-# set default host to local unix port
-export PGHOST="/tmp"
-
 DATABASES=$(ls ./dbstructure)
 let i=0
 for DB in ${DATABASES[@]}; do
