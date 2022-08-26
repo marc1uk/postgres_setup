@@ -34,6 +34,7 @@ actions=$(dialog --checklist "Please select the actions to carry out" 20 80 4 \
 2 "Clone and build GDConcMeasure" on \
 3 "Create postgres database" on \
 4 "Setup cron jobs" on \
+5 "Setup webserver" on \
 2>&1 1>/dev/tty)
 
 if [ $? -ne 0 ]; then
@@ -208,4 +209,40 @@ if [ ${ACTIONS[${ACTIONITEM}]:-0} -eq 4 ]; then
 	let ACTIONITEM=${ACTIONITEM}+1
 fi
 
-
+if [ ${ACTIONS[${ACTIONITEM}]:-0} -eq 5 ]; then
+	# web server set up
+	cd /home/pi
+	sudo -u pi git clone git@github.com:marc1uk/WebServer.git
+	#git clone https://github.com/GDconcentration/WebServer.git
+	sudo ln -s /home/pi/WebServer /var/www
+	sudo apt-get install apach2 libapache2-mod-php
+	cd /home/pi/WebServer/html
+	# these seem necessary if redundant, perhaps we can restructure the repo
+	ln -s $PWD/marcus/d3/d3.min.js $PWD/d3.min.js
+	cp ../bootstrap-5.1.3-dist.zip marcus/
+	cd marcus
+	unzip bootstrap-5.1.3-dist.zip
+	rm bootstrap-5.1.3-dist.zip
+	# to enable the use of cgi scripts we need to enable the cgi apache module
+	# which is apparently done like this:
+	a2enmod cgi   # NOT cgid.
+	# and this thing which tells it to allow execution of cgi scripts in
+	# /var/www/cgi-bin instead of the default /usr/lib/blah.
+	# this doesn't seem to be the normally documented place to do this but ok.
+	sudo cp ./serve-cgi-bin.conf /etc/apache2/conf-available/serve-cgi-bin.conf
+	sudo systemctl restart apache2
+	
+	# we also need to add www-data to the postgres identity map
+	# in order to allow it to run psql queries.
+	# i guess really we should make a read-only account and use that...
+	# first we need to find out the right pg_ident.conf file
+	# we assume there is only one cluster... FIXME maybe not
+	PGIDENTFILE=$(sudo -u postgres psql -t -c "SHOW ident_file")
+	if [ ! -z ${PGIDENTFILE} ]; then
+		echo 'localmap        www-data                postgres' >> ${PGIDENTFILE}
+	else
+		echo "user 'www-data' must be added to pg_ident.conf to allow website " \
+		     "to be able to query the database. Couldn't locate pg_ident.conf; " \
+		     "please do this manually"
+	fi
+fi
