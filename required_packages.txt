@@ -26,3 +26,4 @@ libusb-dev
 bc
 sudo
 openconnect
+i2c-tools
