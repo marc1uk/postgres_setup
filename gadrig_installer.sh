@@ -86,7 +86,8 @@ if [ ${ACTIONS[${ACTIONITEM}]} -eq 1 ]; then
 			#apt-get update && apt-get install -y ${PACKAGES_TO_INSTALL} 2>&1 | dialog --title "installing..." --progressbox 20 80
 			# allow-releaseinfo-change allows the repo names to change from 'stable' to 'oldstable' etc
 			# when debian version changes.
-			apt-get update --allow-releaseinfo-change && apt-get install -y ${PACKAGES_TO_INSTALL}
+			#apt-get update --allow-releaseinfo-change && apt-get install -y ${PACKAGES_TO_INSTALL}
+			dnf install -y ${PACKAGES_TO_INSTALL}
 			# n.b. programbox is the same as progressbox but requires 'ok' when you're done
 			# check the install succeeded
 			#if [ ${PIPESTATUS[0]} -ne 0 ]; then

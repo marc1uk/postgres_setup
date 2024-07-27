@@ -43,6 +43,8 @@ actions=$(dialog --checklist "Please select the actions to carry out" 20 80 9 \
 2>&1 1>/dev/tty)
 #99 "Set password for postgres user" on \   ## apparently this is bad for security
 
+echo "choices made"
+
 # TODO for containers only, sudo required the hostname of the host to be added to
 # /etc/hosts of the container:
 # 127.0.0.1    hk-bu
